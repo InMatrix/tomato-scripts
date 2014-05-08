@@ -57,7 +57,7 @@ def find_dev_name(ip, timestamp):
 	rs = dev_list.find({'ip':ip, 'timestamp':{'$lte': timestamp}})
 	rs_ct = rs.count()
 	if rs_ct == 0:
-		return 'unknown device'
+		return ip.split('.')[-1]
 	elif rs_ct == 1:
 		return rs[0]['dev_name']
 	else:

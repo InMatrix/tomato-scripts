@@ -74,7 +74,8 @@ class TestFindDevName:
 		then assign the dev_name as 'unknown device'.
 		"""
 		dev_name = ld.find_dev_name(self.record['ip'], self.record['timestamp'])
-		assert dev_name == 'unknown device'
+		assert dev_name.isdigit() and len(dev_name) <= 3
+		# a unknown device's name is the last segment of the device's ip address.
 
 
 	def test_single_dev(self):
