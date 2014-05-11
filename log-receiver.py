@@ -13,7 +13,7 @@ app = Flask(__name__)
 def upload_file():
 	f = request.files['the_file']
 	filename = f.filename
-	timestamp = int(time.time())
+	timestamp = int(time.time()) # This is a UTC timestamp
 	new_filename = secure_filename(filename + "_" + str(timestamp) + '.tsv')
 	buf = StringIO(f.read())
 	f.close()

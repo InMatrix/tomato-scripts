@@ -1,6 +1,7 @@
 from pymongo import MongoClient, DESCENDING
 import pdb
 import gzip, os
+from datetime import datetime
 
 __DBNAME__ = 'router_logs'
 global client
@@ -15,6 +16,8 @@ def update_dev_list(file_object, timestamp):
 	"""
 	db = client[__DBNAME__]
 	dev_list = db.dev_list
+	my_date = datetime.utcfromtimestamp(timestamp)
+
 	for line in file_object:
 		dev_record = line.split()
 		dev_name = dev_record[3]
@@ -22,46 +25,47 @@ def update_dev_list(file_object, timestamp):
 		dev_rs = dev_list.find({'dev_name': dev_name})
 		if dev_rs.count() == 0:
 			# New device, add record
-			new_dev = {'dev_name': dev_name, 'ip': dev_ip, 'timestamp': timestamp}
+			new_dev = {'dev_name': dev_name, 'ip': dev_ip, 'last_updated': my_date}
 			dev_list.insert(new_dev)
 		else:
 			# Known device, then test if its IP has changed since last update.
-			last_ip = dev_rs.sort('timestamp', DESCENDING)[0]['ip']
+			last_ip = dev_rs.sort('last_updated', DESCENDING)[0]['ip']
 			if last_ip != dev_ip:
-				new_dev = {'dev_name': dev_name, 'ip': dev_ip, 'timestamp': timestamp}
+				new_dev = {'dev_name': dev_name, 'ip': dev_ip, 'last_updated': my_date}
 				dev_list.insert(new_dev) # Refactor
 	# Update the timestamp of the most recently processed device list file
-	update_latest_dev_list_timestamp(timestamp)
+	update_dev_list_latest_updated(my_date)
 	return True
 
-def update_latest_dev_list_timestamp(timestamp):
+def update_dev_list_latest_updated(my_date):
 	db = client[__DBNAME__]
-	db.prop.update({'key': 'latest_dev_list_timestamp'}, {'key': 'latest_dev_list_timestamp', 'val': timestamp}, upsert=True)
+	db.prop.update({'key': 'dev_list_latest_updated'}, {'key': 'dev_list_latest_updated', 'val': my_date}, upsert=True)
 
-def get_latest_dev_list_timestamp():
+def get_dev_list_latest_updated():
 	db = client[__DBNAME__]
 	try:
-		latest_dev_list_timestamp = db.prop.find_one({'key': 'latest_dev_list_timestamp'})['val']
+		dev_list_latest_updated = db.prop.find_one({'key': 'dev_list_latest_updated'})['val']
 	except TypeError:
-		latest_dev_list_timestamp = 0
-	return latest_dev_list_timestamp
+		dev_list_latest_updated = datetime.utcfromtimestamp(0)
+	return dev_list_latest_updated
 
-def find_dev_name(ip, timestamp):
+def find_dev_name(ip, my_date):
 	""" Find a device's name based on its IP address and the time its IP address was logged. 
 	1. In the dev_list collection, find all the devices that had used the ip before the timestamp.
 	2. If there was only one device used that ip, return that device's name.
 	3. If there were more than one device,  use the name of the device that used the IP address most recently.
+	4. If no record exists for this ip before the specified datetime, return nothing.
 	"""
 	db = client[__DBNAME__]
 	dev_list = db.dev_list
-	rs = dev_list.find({'ip':ip, 'timestamp':{'$lte': timestamp}})
+	rs = dev_list.find({'ip':ip, 'last_updated':{'$lte': my_date}})
 	rs_ct = rs.count()
 	if rs_ct == 0:
-		return ip.split('.')[-1]
+		return None
 	elif rs_ct == 1:
 		return rs[0]['dev_name']
 	else:
-		return rs.sort('timestamp', DESCENDING)[0]['dev_name'] 
+		return rs.sort('last_updated', DESCENDING)[0]['dev_name'] 
 
 def write_access_log(file_object):
 	""" This function writes to the domain access log based on a new recent domains log file received
@@ -71,37 +75,42 @@ def write_access_log(file_object):
 	"""
 	db = client[__DBNAME__]
 	access_log = db.access_log
-	latest_dev_list_timestamp = get_latest_dev_list_timestamp()
+	dev_list_latest_updated = get_dev_list_latest_updated()
 	try:
-		latest_access_log_timestamp = access_log.find_one(sort=[('timestamp', DESCENDING)])['timestamp']
+		latest_access_log_time = access_log.find_one(sort=[('accessed_on', DESCENDING)])['accessed_on']
 	except TypeError:
-		latest_access_log_timestamp = 0
+		latest_access_log_time = datetime.utcfromtimestamp(0)
 	# There can be more than one record updated with the same timestamp,
 	# but for simplicity and the purpose of this application, 
 	# we assume that a timestamp won't show up in more than one log file.
 	for line in file_object:
 		record = line.split()
-		timestamp = int(record[0])
+		my_date = datetime.utcfromtimestamp(int(record[0]))
 		domain = record[2]
-		if timestamp <= latest_access_log_timestamp:
+		if my_date <= latest_access_log_time:
 			# This line and all lines below it have been processed. 
 			break
 		ip = record[1]
 		# Check if the timestamp is newer than the latest timestamp processed for the device list log.
-		if timestamp <= latest_dev_list_timestamp:
-			dev_name = find_dev_name(ip, timestamp)
-			access_log.insert({'timestamp': timestamp, 'dev_name': dev_name, 'domain': domain})
+		my_doc = {'accessed_on': my_date, 'domain': domain}
+		if my_date <= dev_list_latest_updated:
+			dev_name = find_dev_name(ip, my_date)
+			if dev_name != None:
+				my_doc['dev_name'] = dev_name
+			else:
+				my_doc['ip_last'] = ip.split('.')[-1]
 		else:
-			access_log.insert({'timestamp': timestamp, 'ip': ip, 'domain': domain})
+			my_doc['ip'] = ip
+		access_log.insert(my_doc)
 
 def process_delayed_access_records():
 	"""This function find device names for those access log records inserted before the device list has been updated. """
 	db = client[__DBNAME__]
 	access_log = db.access_log
-	latest_dev_list_timestamp = get_latest_dev_list_timestamp()
-	rs = access_log.find({'timestamp': {'$lte': latest_dev_list_timestamp}, 'ip': {'$exists': True}})
+	dev_list_latest_updated = get_dev_list_latest_updated()
+	rs = access_log.find({'accessed_on': {'$lte': dev_list_latest_updated}, 'ip': {'$exists': True}})
 	for r in rs:
-		r['dev_name'] = find_dev_name(r['ip'], r['timestamp'])
+		r['dev_name'] = find_dev_name(r['ip'], r['accessed_on'])
 		r.pop('ip', None)
 		access_log.update({'_id': r['_id']}, r)
 

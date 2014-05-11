@@ -1,6 +1,7 @@
 import log_db as ld
 from pymongo import MongoClient, DESCENDING
 import os, gzip
+from datetime import datetime
 import pdb
 
 def setup_module():
@@ -25,26 +26,28 @@ class TestUpdateDevList:
 	def test_new_devs(self):
 		filename = 'testdata/dnsmasq.leases_1397433316'
 		timestamp = 1397433316
+		my_date = datetime.utcfromtimestamp(timestamp)
 		with open(filename) as f:
 			ld.update_dev_list(f, timestamp)
 		device = self.dev_list.find_one({"dev_name":"Taos-iPhone-5S"})
-		count = self.dev_list.find({'timestamp':timestamp}).count()
-		latest_timestamp = db.prop.find_one({'key': 'latest_dev_list_timestamp'})['val']
-		assert device['ip'] == "192.168.1.23" and device['timestamp'] == timestamp \
-			and count == 7 and latest_timestamp == timestamp
+		count = self.dev_list.find({'last_updated': my_date}).count()
+		dev_list_latest_updated = db.prop.find_one({'key': 'dev_list_latest_updated'})['val']
+		assert device['ip'] == "192.168.1.23" and device['last_updated'] == my_date \
+			and count == 7 and dev_list_latest_updated == my_date
 
 	def test_update_devs(self):
 		filename = 'testdata/dnsmasq.leases_1397437705'
 		timestamp = 1397437705
+		my_date = datetime.utcfromtimestamp(timestamp)
 		with open(filename) as f:
 			ld.update_dev_list(f, timestamp)
-		tao_iphone = self.dev_list.find_one({"dev_name": "Taos-iPhone-5S"}, sort=[('timestamp', DESCENDING)])
+		tao_iphone = self.dev_list.find_one({"dev_name": "Taos-iPhone-5S"}, sort=[('last_updated', DESCENDING)])
 		idea_pc = self.dev_list.find_one({"dev_name":"idea-PC"})
-		latest_count = self.dev_list.find({'timestamp':timestamp}).count()
+		latest_count = self.dev_list.find({'last_updated':my_date}).count()
 		total_count = self.dev_list.find().count()
-		latest_timestamp = db.prop.find_one({'key': 'latest_dev_list_timestamp'})['val']
-		assert tao_iphone['ip'] == "192.168.1.20" and tao_iphone['timestamp'] == timestamp \
-			and latest_count == 2 and total_count == 9 and idea_pc != None and latest_timestamp == timestamp
+		dev_list_latest_updated = db.prop.find_one({'key': 'dev_list_latest_updated'})['val']
+		assert tao_iphone['ip'] == "192.168.1.20" and tao_iphone['last_updated'] == my_date \
+			and latest_count == 2 and total_count == 9 and idea_pc != None and dev_list_latest_updated == my_date
 
 	def teardown_class(self):
 		print 'teardown'
@@ -58,25 +61,20 @@ class TestFindDevName:
 		self.DEV_NAME = "Taos-iPhone-5S"
 		self.dev_list = db.dev_list
 		# setup the testing data
-		self.record = {'timestamp': 1397437700, 'domain':'www.facebook.com', 'ip': '192.168.1.20'} 
+		self.record = {"accessed_on": datetime.utcfromtimestamp(1397437700), 'domain':'www.facebook.com', 'ip': '192.168.1.20'} 
 		# setup the dev_list collection
 		my_devs = [{"dev_name": self.DEV_NAME, 
 					"ip": "192.168.1.20",
-					"timestamp": 1397437705},
+					"last_updated": datetime.utcfromtimestamp(1397437705)},
 				   {"dev_name": "idea-PC", 
 					"ip": "192.168.1.28",
-					"timestamp": 1397433316}]
+					"last_updated": datetime.utcfromtimestamp(1397433316)}]
 
 		self.dev_list.insert(my_devs)
 
 	def test_unknown_dev(self):
-		""" If there is no record matching the given IP with an earlier timestamp in the database, 
-		then assign the dev_name as 'unknown device'.
-		"""
-		dev_name = ld.find_dev_name(self.record['ip'], self.record['timestamp'])
-		assert dev_name.isdigit() and len(dev_name) <= 3
-		# a unknown device's name is the last segment of the device's ip address.
-
+		dev_name = ld.find_dev_name(self.record['ip'], self.record['accessed_on'])
+		assert dev_name == None
 
 	def test_single_dev(self):
 		""" If there is a single record matching the given IP with an earlier timestamp in the database, 
@@ -84,9 +82,9 @@ class TestFindDevName:
 		"""
 		new_dev = {	"dev_name": self.DEV_NAME,
 				   	"ip": "192.168.1.20",
-					"timestamp": 1397433316}
+					"last_updated": datetime.utcfromtimestamp(1397433316)}
 		self.dev_list.insert(new_dev)
-		dev_name = ld.find_dev_name(self.record['ip'], self.record['timestamp'])
+		dev_name = ld.find_dev_name(self.record['ip'], self.record['accessed_on'])
 		assert dev_name == self.DEV_NAME
 
 	def test_multi_dev(self):
@@ -95,9 +93,9 @@ class TestFindDevName:
 		"""
 		new_dev = {	"dev_name": 'idea-PC',
 		   	"ip": "192.168.1.20",
-			"timestamp": 1397435316}
+			"last_updated": datetime.utcfromtimestamp(1397435316)}
 		self.dev_list.insert(new_dev)
-		dev_name = ld.find_dev_name(self.record['ip'], self.record['timestamp'])
+		dev_name = ld.find_dev_name(self.record['ip'], self.record['accessed_on'])
 		assert dev_name == 'idea-PC'
 
 	def teardown_class(self):
@@ -115,34 +113,36 @@ class TestWriteAccessLog:
 		# Prepare test data
 		access_records = [{	"dev_name": "idea-PC", 
 			"domain": "www.google.com",
-			"timestamp": 1397433316},
+			"accessed_on": datetime.utcfromtimestamp(1397433316)},
 			{"dev_name": "idea-PC", 
 			"domain": "www.facebook.com",
-			"timestamp": 1397433316},
+			"accessed_on": datetime.utcfromtimestamp(1397433316)},
 			{"ip": "192.168.1.20", 
 			"domain": "www.twitter.com",
-			"timestamp": 1397437705},
+			"accessed_on": datetime.utcfromtimestamp(1397437705)},
 			{"ip": "192.168.1.20", 
 			"domain": "www.twitter.com",
-			"timestamp": 1397437710},
+			"accessed_on": datetime.utcfromtimestamp(1397437710)},
 			{"ip": "192.168.1.20", 
 			"domain": "www.twitter.com",
-			"timestamp": 1397437805}]
+			"accessed_on": datetime.utcfromtimestamp(1397437805)}]
+
 		dev_list = [{"dev_name": 'iPhone-5S', 
 			"ip": "192.168.1.20",
-			"timestamp": 1397437705},
+			"last_updated": datetime.utcfromtimestamp(1397437705)},
 		   {"dev_name": "idea-PC", 
 			"ip": "192.168.1.28",
-			"timestamp": 1397433316}]
-		latest_dev_list_timestamp = 1397437750
+			"last_updated": datetime.utcfromtimestamp(1397433316)}]
+		
+		latest_dev_list_time = datetime.utcfromtimestamp(1397437750)
 		db.dev_list.insert(dev_list)
 		db.access_log.insert(access_records)
-		ld.update_latest_dev_list_timestamp(latest_dev_list_timestamp)
+		ld.update_dev_list_latest_updated(latest_dev_list_time)
 
 		ld.process_delayed_access_records()
-		r1 = db.access_log.find_one({'timestamp': 1397437705})
-		r2 = db.access_log.find_one({'timestamp': 1397437710})
-		r3 = db.access_log.find_one({'timestamp': 1397437805})
+		r1 = db.access_log.find_one({"accessed_on": datetime.utcfromtimestamp(1397437705)})
+		r2 = db.access_log.find_one({"accessed_on": datetime.utcfromtimestamp(1397437710)})
+		r3 = db.access_log.find_one({"accessed_on": datetime.utcfromtimestamp(1397437805)})
 		assert r1['dev_name'] == 'iPhone-5S' and r2['dev_name'] == 'iPhone-5S' \
 			and 'ip' not in r1 and 'ip' not in r2 \
 			and 'dev_name' not in r3 and r3['ip'] == "192.168.1.20"
@@ -156,25 +156,25 @@ class TestWriteAccessLog:
 		# Prepare test data
 		dev_list = [{"dev_name": 'MacBook-Air', 
 			"ip": "192.168.1.40",
-			"timestamp": 1397415116},
+			"last_updated": datetime.utcfromtimestamp(1397415116)},
 			{"dev_name": "iPhone-5S", 
 			"ip": "192.168.1.23",
-			"timestamp": 1397415116},
+			"last_updated": datetime.utcfromtimestamp(1397415116)},
 		   	{"dev_name": "idea-PC", 
 			"ip": "192.168.1.49",
-			"timestamp": 1397415116}]
+			"last_updated": datetime.utcfromtimestamp(1397415116)}]
 		db.dev_list.insert(dev_list)
 
 		access_records = [{"dev_name": "MacBook-Air", 
 			"domain": "hmma.baidu.com",
-			"timestamp": 1397415483},
+			"accessed_on": datetime.utcfromtimestamp(1397415483)},
 			{"dev_name": "MacBook-Air", 
 			"domain": "www.google.com",
-			"timestamp": 1397415483}]
+			"accessed_on": datetime.utcfromtimestamp(1397415483)}]
 		access_log.insert(access_records)
 
-		latest_dev_list_timestamp = 1397415499
-		ld.update_latest_dev_list_timestamp(latest_dev_list_timestamp)
+		latest_dev_list_time = datetime.utcfromtimestamp(1397415499)
+		ld.update_dev_list_latest_updated(latest_dev_list_time)
 
 		# Call the function being tested
 		with open('testdata/webmon_recent_domains_test') as f:
