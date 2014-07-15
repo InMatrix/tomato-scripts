@@ -1,0 +1,1 @@
+/tmp/curl -F the_file=@/var/lib/misc/dnsmasq.leases http://192.168.1.6:5000/upload

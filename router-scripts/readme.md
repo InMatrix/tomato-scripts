@@ -1,0 +1,1 @@
+The scripts in this folder need to run repetitively on the router. You can copy and paste them to the Scheduler page in the Tomato admin software. Direct URL: http://192.168.1.1/admin-sched.asp
