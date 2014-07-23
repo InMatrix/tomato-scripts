@@ -26,7 +26,7 @@ def upload_file():
     buf = StringIO(f.read())
     f.close()
 
-    log_parser = RouterLogParser(home_id, app.config['DB_CONNECTION'], db_name=app.config['DB_NAME'])
+    log_parser = RouterLogParser(home_id, app.config['DB_CONNECTION'])
 
     if filename == 'dnsmasq.leases':
         log_parser.update_dev_list(buf, timestamp)
